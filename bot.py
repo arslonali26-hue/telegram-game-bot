@@ -512,6 +512,22 @@ async def earn(update, kind):
     await show(update, text, back())
 
 
+def clan_meta(clan_name):
+    clans = read(CLANS_FILE)
+    clan = clans.get(clan_name, {})
+    clan.setdefault("bank", 0)
+    clan.setdefault("level", 1)
+    clan.setdefault("xp", 0)
+    clan.setdefault("members", [])
+    clan.setdefault("leader", "")
+    clan.setdefault("helpers", [])
+    clan.setdefault("pending", [])
+    clan.setdefault("logs", [])
+    clans[clan_name] = clan
+    write(CLANS_FILE, clans)
+    return clan
+
+
 async def clan(update, context):
     uid = update.effective_user.id
     value = get_user(uid)
@@ -519,16 +535,18 @@ async def clan(update, context):
     if not value.get("clan"):
         await show(update, "👥 Siz clan a’zosi emassiz.\n/createclan Nomi — yaratish\n/joinclan Nomi — qo‘shilish", back())
         return
-    current = clans.get(value["clan"], {})
-    members = current.get("members", [])
+    clan_name = value["clan"]
+    clan_data = clan_meta(clan_name)
+    members = clan_data.get("members", [])
     await show(
         update,
-        f"👥 CLAN: {value['clan']}\n\n"
+        f"👥 CLAN: {clan_name}\n\n"
         f"👥 A’zolar: {len(members)}\n"
-        f"💰 Bank: {current.get('bank', 0)}\n"
-        f"👑 Lider: {current.get('leader', '-')}\n"
-        f"⭐ Level: {current.get('level', 1)}\n"
-        f"⭐ XP: {current.get('xp', 0)}/100",
+        f"💰 Bank: {clan_data.get('bank', 0)}\n"
+        f"👑 Lider: {clan_data.get('leader', '-')}\n"
+        f"⭐ Level: {clan_data.get('level', 1)}\n"
+        f"⭐ XP: {clan_data.get('xp', 0)}/100\n"
+        f"🧩 Yordamchilar: {len(clan_data.get('helpers', []))}",
         back(),
     )
 
@@ -553,9 +571,8 @@ async def create_clan(update, context):
         "bank": 0,
         "level": 1,
         "xp": 0,
-        "description": "",
-        "pending": [],
         "helpers": [],
+        "pending": [],
         "logs": [f"{datetime.now().isoformat()} | {name} clani yaratildi."],
     }
     write(CLANS_FILE, clans)
@@ -839,6 +856,68 @@ async def remove_helper(update, context):
         await update.message.reply_text("Bu foydalanuvchi yordamchi emas.")
 
 
+async def clan_donate(update, context):
+    if not context.args:
+        await update.message.reply_text("Foydalanish: /donateclan MIQDOR")
+        return
+    uid = update.effective_user.id
+    value = get_user(uid)
+    clan_name = value.get("clan")
+    if not clan_name:
+        await update.message.reply_text("Siz clan a’zosi emassiz.")
+        return
+    try:
+        amount = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("MIQDOR son bo‘lishi kerak.")
+        return
+    if amount <= 0:
+        await update.message.reply_text("Miqdor 0 dan katta bo‘lishi kerak.")
+        return
+    if value["money"] < amount:
+        await update.message.reply_text("Pul yetarli emas.")
+        return
+    value["money"] -= amount
+    clans = read(CLANS_FILE)
+    clan = clans.setdefault(clan_name, {"leader": str(uid), "members": [str(uid)], "bank": 0, "level": 1, "xp": 0, "helpers": [], "pending": [], "logs": []})
+    clan["bank"] = clan.get("bank", 0) + amount
+    clan["xp"] = clan.get("xp", 0) + max(1, amount // 100)
+    while clan.get("xp", 0) >= 100:
+        clan["xp"] -= 100
+        clan["level"] = clan.get("level", 1) + 1
+    clan.setdefault("logs", []).append(f"{datetime.now().isoformat()} | {uid} {amount} pul xayriya qildi.")
+    write(CLANS_FILE, clans)
+    save_user(uid, value)
+    await update.message.reply_text(f"✅ {amount} pul clan bankiga qo‘shildi.")
+
+
+async def clan_upgrade(update, context):
+    uid = update.effective_user.id
+    value = get_user(uid)
+    clan_name = value.get("clan")
+    if not clan_name:
+        await update.message.reply_text("Siz clan a’zosi emassiz.")
+        return
+    clans = read(CLANS_FILE)
+    clan = clans.get(clan_name)
+    if not clan:
+        await update.message.reply_text("Clan topilmadi.")
+        return
+    if clan.get("leader") != str(uid):
+        await update.message.reply_text("Faqat rahbar clan levelini oshirishi mumkin.")
+        return
+    cost = 5000 + (clan.get("level", 1) * 3000)
+    if clan.get("bank", 0) < cost:
+        await update.message.reply_text(f"Clan bankida yetarli pul yo‘q. Kerak: {cost}.")
+        return
+    clan["bank"] -= cost
+    clan["level"] = clan.get("level", 1) + 1
+    clan["xp"] = 0
+    clan.setdefault("logs", []).append(f"{datetime.now().isoformat()} | Rahbar {uid} clan levelini oshirdi.")
+    write(CLANS_FILE, clans)
+    await update.message.reply_text(f"✅ Clan leveli oshirildi. Yangi level: {clan['level']}")
+
+
 async def callback(update, context):
     data = update.callback_query.data
     if data == "main":
@@ -999,6 +1078,8 @@ def main():
     application.add_handler(CommandHandler("kickclan", kick_clan_member))
     application.add_handler(CommandHandler("assignhelper", assign_helper))
     application.add_handler(CommandHandler("removehelper", remove_helper))
+    application.add_handler(CommandHandler("donateclan", clan_donate))
+    application.add_handler(CommandHandler("clanupgrade", clan_upgrade))
     application.add_handler(CommandHandler("addmoney", add_money))
     application.add_handler(CommandHandler("adddiamond", add_diamond))
     application.add_handler(CommandHandler("broadcast", broadcast))
