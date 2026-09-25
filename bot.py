@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -17,8 +18,8 @@ LOCK = threading.RLock()
 def read(path):
     with LOCK:
         try:
-            with open(path, encoding="utf-8") as f:
-                value = json.load(f)
+            with open(path, encoding="utf-8") as file:
+                value = json.load(file)
                 return value if isinstance(value, dict) else {}
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return {}
@@ -26,10 +27,10 @@ def read(path):
 
 def write(path, data):
     with LOCK:
-        tmp = str(path) + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
+        temporary = str(path) + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, indent=2)
+        os.replace(temporary, path)
 
 
 def default_user():
@@ -60,10 +61,6 @@ def back():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data="main")]])
 
 
-def command_back():
-    return back()
-
-
 async def show(update, text, markup=None):
     markup = markup or back()
     if update.callback_query:
@@ -80,23 +77,29 @@ async def show(update, text, markup=None):
         await update.message.reply_text(text, reply_markup=markup)
 
 
-def clans_with_defaults():
+def clans_data():
     clans = read(CLANS_FILE)
+    defaults = {"leader": "", "members": [], "pending": [], "helpers": [], "bank": 0, "level": 1, "xp": 0, "territory": 0, "war_wins": 0, "war_losses": 0, "logs": []}
+    changed = False
     for name, clan in clans.items():
         if not isinstance(clan, dict):
-            clans[name] = {}
-            clan = clans[name]
-        defaults = {"name": name, "leader": "", "members": [], "pending": [], "helpers": [], "bank": 0, "level": 1, "xp": 0, "description": "", "logs": []}
+            clan = {}
+            clans[name] = clan
+            changed = True
         for key, value in defaults.items():
-            clan.setdefault(key, value)
-    write(CLANS_FILE, clans)
+            if key not in clan:
+                clan[key] = value.copy() if isinstance(value, list) else value
+                changed = True
+        clan.setdefault("name", name)
+    if changed:
+        write(CLANS_FILE, clans)
     return clans
 
 
 def clan_for(name):
     if not name:
         return None
-    return clans_with_defaults().get(name)
+    return clans_data().get(name)
 
 
 def leader_clan(uid):
@@ -106,8 +109,8 @@ def leader_clan(uid):
     return name, clan if clan and clan.get("leader") == str(uid) else None
 
 
-def reply_text(update, text):
-    return update.message.reply_text(text, reply_markup=command_back())
+def command_reply(update, text):
+    return update.message.reply_text(text, reply_markup=back())
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -116,7 +119,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user.update(first_name=person.first_name or "", username=person.username or "")
     save_user(person.id, user)
     await update.message.reply_text(
-        f"Salom, {person.first_name}! 🎮\n\n💰 Pul: {user['money']:,}\n💎 Almas: {user['diamonds']}\n"
+        f"Salom, {person.first_name}! 🎮\n\n"
+        f"💰 Pul: {user['money']:,}\n💎 Almas: {user['diamonds']}\n"
         f"❤️ HP: {user['hp']}/{user['max_hp']}\n👥 Clan: {user.get('clan') or 'yo‘q'}",
         reply_markup=menu(),
     )
@@ -132,14 +136,9 @@ async def clan(update, context):
     uid = update.effective_user.id
     user = get_user(uid)
     name = user.get("clan")
-    if not name:
-        await show(update, "👥 Siz clan a’zosi emassiz.\n\n/createclan ClanNomi\n/joinclan ClanNomi\n/requestclan ClanNomi")
-        return
     data = clan_for(name)
     if not data:
-        user["clan"] = None
-        save_user(uid, user)
-        await show(update, "⚠️ Clan topilmadi.")
+        await show(update, "👥 Siz clan a’zosi emassiz.\n\n/createclan ClanNomi\n/joinclan ClanNomi\n/requestclan ClanNomi")
         return
     members = []
     for member in data["members"]:
@@ -147,24 +146,24 @@ async def clan(update, context):
         display = member_user.get("first_name") or member_user.get("username") or member
         role = "👑 Rahbar" if member == data["leader"] else ("🛠 Yordamchi" if member in data["helpers"] else "👤 A’zo")
         members.append(f"{role} {display}")
-    await show(update, f"🏰 CLAN: {name}\n\n👑 Rahbar: {data['leader']}\n👥 A’zolar: {len(data['members'])}\n💰 Bank: {data['bank']:,}\n⭐ Level: {data['level']}\n⭐ XP: {data['xp']}/100\n🧩 Yordamchilar: {len(data['helpers'])}\n⏳ So‘rovlar: {len(data['pending'])}\n\n📋 A’zolar:\n" + ("\n".join(members) or "yo‘q"))
+    await show(update, f"🏰 CLAN: {name}\n\n👑 Rahbar: {data['leader']}\n👥 A’zolar: {len(data['members'])}\n💰 Bank: {data['bank']:,}\n⭐ Level: {data['level']}\n⭐ XP: {data['xp']}/100\n🌍 Hudud: {data['territory']}\n⚔️ War: {data['war_wins']}W / {data['war_losses']}L\n🧩 Yordamchilar: {len(data['helpers'])}\n⏳ So‘rovlar: {len(data['pending'])}\n\n📋 A’zolar:\n" + ("\n".join(members) or "yo‘q"))
 
 
 async def create_clan(update, context):
     if not context.args:
-        await reply_text(update, "Foydalanish: /createclan ClanNomi")
+        await command_reply(update, "Foydalanish: /createclan ClanNomi")
         return
     uid = update.effective_user.id
     user = get_user(uid)
     name = " ".join(context.args).strip()[:32]
-    clans = clans_with_defaults()
+    clans = clans_data()
     if user.get("clan"):
-        await reply_text(update, "Siz allaqachon clandasiz.")
+        await command_reply(update, "Siz allaqachon clandasiz.")
         return
     if not name or name in clans:
-        await reply_text(update, "Clan nomi bo‘sh yoki mavjud.")
+        await command_reply(update, "Clan nomi bo‘sh yoki mavjud.")
         return
-    clans[name] = {"name": name, "leader": str(uid), "members": [str(uid)], "pending": [], "helpers": [], "bank": 0, "level": 1, "xp": 0, "description": "", "logs": [f"{datetime.now().isoformat()} | clan yaratildi"]}
+    clans[name] = {"name": name, "leader": str(uid), "members": [str(uid)], "pending": [], "helpers": [], "bank": 0, "level": 1, "xp": 0, "territory": 0, "war_wins": 0, "war_losses": 0, "logs": [f"{datetime.now().isoformat()} | clan yaratildi"]}
     write(CLANS_FILE, clans)
     user["clan"] = name
     save_user(uid, user)
@@ -173,18 +172,18 @@ async def create_clan(update, context):
 
 async def join_clan(update, context):
     if not context.args:
-        await reply_text(update, "Foydalanish: /joinclan ClanNomi")
+        await command_reply(update, "Foydalanish: /joinclan ClanNomi")
         return
     uid = update.effective_user.id
     user = get_user(uid)
     name = " ".join(context.args).strip()
-    clans = clans_with_defaults()
-    clan_data = clans.get(name)
+    clans = clans_data()
     if user.get("clan"):
-        await reply_text(update, "Avval hozirgi clandan chiqing.")
+        await command_reply(update, "Avval hozirgi clandan chiqing.")
         return
+    clan_data = clans.get(name)
     if not clan_data:
-        await reply_text(update, "Bunday clan topilmadi.")
+        await command_reply(update, "Bunday clan topilmadi.")
         return
     if str(uid) not in clan_data["members"]:
         clan_data["members"].append(str(uid))
@@ -198,10 +197,10 @@ async def leave_clan(update, context):
     uid = update.effective_user.id
     user = get_user(uid)
     name = user.get("clan")
-    clans = clans_with_defaults()
+    clans = clans_data()
     clan_data = clans.get(name) if name else None
     if not clan_data:
-        await reply_text(update, "Siz clanda emassiz.")
+        await command_reply(update, "Siz clanda emassiz.")
         return
     clan_data["members"] = [member for member in clan_data["members"] if member != str(uid)]
     clan_data["helpers"] = [member for member in clan_data["helpers"] if member != str(uid)]
@@ -214,114 +213,131 @@ async def leave_clan(update, context):
     write(CLANS_FILE, clans)
     user["clan"] = None
     save_user(uid, user)
-    await reply_text(update, "✅ Clandan chiqdingiz.")
+    await command_reply(update, "✅ Clandan chiqdingiz.")
 
 
 async def clans_list(update, context):
-    clans = clans_with_defaults()
+    clans = clans_data()
     if not clans:
         await show(update, "🧭 Hozircha clan yo‘q.")
         return
     lines = ["🏰 CLANLAR\n"]
     for name, data in sorted(clans.items(), key=lambda item: item[1].get("level", 1), reverse=True):
-        lines.append(f"• {name} | 👥 {len(data['members'])} | 💰 {data['bank']:,} | ⭐ L{data['level']} XP {data['xp']}/100")
+        lines.append(f"• {name} | 👥 {len(data['members'])} | 💰 {data['bank']:,} | ⭐ L{data['level']} | 🌍 {data['territory']}")
     await show(update, "\n".join(lines))
 
 
 async def request_clan(update, context):
     if not context.args:
-        await reply_text(update, "Foydalanish: /requestclan ClanNomi")
+        await command_reply(update, "Foydalanish: /requestclan ClanNomi")
         return
     uid = update.effective_user.id
     user = get_user(uid)
     if user.get("clan"):
-        await reply_text(update, "Avval hozirgi clandan chiqing.")
+        await command_reply(update, "Avval hozirgi clandan chiqing.")
         return
     name = " ".join(context.args).strip()
-    clans = clans_with_defaults()
+    clans = clans_data()
     clan_data = clans.get(name)
     if not clan_data:
-        await reply_text(update, "Bunday clan topilmadi.")
+        await command_reply(update, "Bunday clan topilmadi.")
         return
     if not any(str(item.get("user")) == str(uid) for item in clan_data["pending"] if isinstance(item, dict)):
         clan_data["pending"].append({"user": str(uid), "time": datetime.now().isoformat()})
         write(CLANS_FILE, clans)
-        await reply_text(update, f"✅ {name} claniga so‘rov yuborildi.")
+        await command_reply(update, f"✅ {name} claniga so‘rov yuborildi.")
     else:
-        await reply_text(update, "So‘rov allaqachon yuborilgan.")
+        await command_reply(update, "So‘rov allaqachon yuborilgan.")
 
 
-async def accept_clan(update, context):
+def war_power(clan):
+    return clan.get("level", 1) * 50 + len(clan.get("members", [])) * 20 + clan.get("territory", 0) * 15
+
+
+async def clan_war(update, context):
     if not context.args:
-        await reply_text(update, "Foydalanish: /acceptclan USER_ID")
+        await command_reply(update, "Foydalanish: /clanwar RaqibClanNomi")
         return
-    name, clan_data = leader_clan(update.effective_user.id)
-    if not clan_data:
-        await reply_text(update, "Faqat clan rahbari qabul qila oladi.")
+    uid = update.effective_user.id
+    user = get_user(uid)
+    source_name = user.get("clan")
+    target_name = " ".join(context.args).strip()
+    clans = clans_data()
+    source = clans.get(source_name) if source_name else None
+    target = clans.get(target_name)
+    if not source:
+        await command_reply(update, "Siz clan a’zosi emassiz.")
         return
+    if not target:
+        await command_reply(update, "Raqib clan topilmadi.")
+        return
+    if source_name == target_name:
+        await command_reply(update, "O‘z clanngizga qarshi urush boshlay olmaysiz.")
+        return
+    source_roll = war_power(source) + random.randint(1, 100)
+    target_roll = war_power(target) + random.randint(1, 100)
+    if source_roll >= target_roll:
+        reward = 2000 + source.get("level", 1) * 250
+        source["bank"] += reward
+        source["territory"] += 1
+        source["war_wins"] += 1
+        target["territory"] = max(0, target["territory"] - 1)
+        target["war_losses"] += 1
+        result = f"🏆 G‘ALABA!\n\n⚔️ {source_name} → {target_name}\n💰 Mukofot: {reward:,}\n🌍 Hudud: +1\n📊 Kuch: {source_roll}–{target_roll}"
+    else:
+        source["bank"] = max(0, source["bank"] - 1000)
+        source["war_losses"] += 1
+        target["bank"] += 1000
+        target["war_wins"] += 1
+        result = f"⚔️ MAG‘LUBIYAT\n\n⚔️ {source_name} → {target_name}\n💸 Yo‘qotish: 1,000\n📊 Kuch: {source_roll}–{target_roll}"
+    source.setdefault("logs", []).append(f"{datetime.now().isoformat()} | {target_name} bilan war")
+    write(CLANS_FILE, clans)
+    await command_reply(update, result)
+
+
+async def clan_donate(update, context):
+    if not context.args:
+        await command_reply(update, "Foydalanish: /donateclan MIQDOR")
+        return
+    uid = update.effective_user.id
+    user = get_user(uid)
+    clan_name = user.get("clan")
+    clans = clans_data()
+    clan_data = clans.get(clan_name) if clan_name else None
     try:
-        target = str(int(context.args[0]))
+        amount = int(context.args[0])
     except ValueError:
-        await reply_text(update, "USER_ID son bo‘lishi kerak.")
+        await command_reply(update, "Miqdor son bo‘lishi kerak.")
         return
-    clans = clans_with_defaults()
-    clan_data["pending"] = [item for item in clan_data["pending"] if str(item.get("user")) != target]
-    if target not in clan_data["members"]:
-        clan_data["members"].append(target)
+    if not clan_data or amount <= 0 or user["money"] < amount:
+        await command_reply(update, "Miqdor noto‘g‘ri yoki pul yetarli emas.")
+        return
+    user["money"] -= amount
+    clan_data["bank"] += amount
+    clan_data["xp"] += max(1, amount // 100)
+    while clan_data["xp"] >= 100:
+        clan_data["xp"] -= 100
+        clan_data["level"] += 1
     write(CLANS_FILE, clans)
-    target_user = get_user(int(target))
-    target_user["clan"] = name
-    save_user(int(target), target_user)
-    await reply_text(update, f"✅ {target} qabul qilindi.")
+    save_user(uid, user)
+    await command_reply(update, f"✅ {amount:,} clan bankiga qo‘shildi. XP: {clan_data['xp']}/100")
 
 
-async def reject_clan(update, context):
-    if not context.args:
-        await reply_text(update, "Foydalanish: /rejectclan USER_ID")
-        return
+async def clan_upgrade(update, context):
     name, clan_data = leader_clan(update.effective_user.id)
     if not clan_data:
-        await reply_text(update, "Faqat clan rahbari rad qila oladi.")
+        await command_reply(update, "Faqat clan rahbari upgrade qila oladi.")
         return
-    clans = clans_with_defaults()
-    target = str(context.args[0])
-    clan_data["pending"] = [item for item in clan_data["pending"] if str(item.get("user")) != target]
+    cost = 5000 + clan_data["level"] * 3000
+    if clan_data["bank"] < cost:
+        await command_reply(update, f"Bank yetarli emas. Kerak: {cost:,}.")
+        return
+    clans = clans_data()
+    clan_data["bank"] -= cost
+    clan_data["level"] += 1
+    clan_data["xp"] = 0
     write(CLANS_FILE, clans)
-    await reply_text(update, f"❌ {target} so‘rovi rad etildi.")
-
-
-async def assign_helper(update, context):
-    if not context.args:
-        await reply_text(update, "Foydalanish: /assignhelper USER_ID")
-        return
-    name, clan_data = leader_clan(update.effective_user.id)
-    if not clan_data:
-        await reply_text(update, "Faqat clan rahbari tayinlaydi.")
-        return
-    target = str(context.args[0])
-    if target not in clan_data["members"]:
-        await reply_text(update, "Bu foydalanuvchi clan a’zosi emas.")
-        return
-    clans = clans_with_defaults()
-    if target not in clan_data["helpers"]:
-        clan_data["helpers"].append(target)
-    write(CLANS_FILE, clans)
-    await reply_text(update, f"✅ {target} yordamchi bo‘ldi.")
-
-
-async def remove_helper(update, context):
-    if not context.args:
-        await reply_text(update, "Foydalanish: /removehelper USER_ID")
-        return
-    name, clan_data = leader_clan(update.effective_user.id)
-    if not clan_data:
-        await reply_text(update, "Faqat clan rahbari olib tashlaydi.")
-        return
-    clans = clans_with_defaults()
-    target = str(context.args[0])
-    clan_data["helpers"] = [member for member in clan_data["helpers"] if member != target]
-    write(CLANS_FILE, clans)
-    await reply_text(update, f"✅ {target} yordamchilikdan olindi.")
+    await command_reply(update, f"✅ Clan leveli {clan_data['level']} bo‘ldi.")
 
 
 async def clan_admin(update, context):
@@ -333,53 +349,73 @@ async def clan_admin(update, context):
     await show(update, f"🏰 {name} ADMIN\n👑 Rahbar: {'ha' if clan_data else 'yo‘q'}\n⏳ So‘rovlar: {len(clan_for(name)['pending'])}")
 
 
-async def donate_clan(update, context):
+async def accept_clan(update, context):
     if not context.args:
-        await reply_text(update, "Foydalanish: /donateclan MIQDOR")
+        await command_reply(update, "Foydalanish: /acceptclan USER_ID")
         return
-    uid = update.effective_user.id
-    user = get_user(uid)
-    name = user.get("clan")
-    clan_data = clan_for(name)
-    if not clan_data:
-        await reply_text(update, "Siz clan a’zosi emassiz.")
-        return
-    try:
-        amount = int(context.args[0])
-    except ValueError:
-        await reply_text(update, "Miqdor son bo‘lishi kerak.")
-        return
-    if amount <= 0 or user["money"] < amount:
-        await reply_text(update, "Miqdor noto‘g‘ri yoki pul yetarli emas.")
-        return
-    clans = clans_with_defaults()
-    user["money"] -= amount
-    clan_data["bank"] += amount
-    clan_data["xp"] += max(1, amount // 100)
-    while clan_data["xp"] >= 100:
-        clan_data["xp"] -= 100
-        clan_data["level"] += 1
-    clan_data["logs"].append(f"{datetime.now().isoformat()} | {uid} {amount} xayriya qildi")
-    write(CLANS_FILE, clans)
-    save_user(uid, user)
-    await reply_text(update, f"✅ {amount:,} clan bankiga qo‘shildi. XP: {clan_data['xp']}/100")
-
-
-async def clan_upgrade(update, context):
     name, clan_data = leader_clan(update.effective_user.id)
     if not clan_data:
-        await reply_text(update, "Faqat clan rahbari upgrade qila oladi.")
+        await command_reply(update, "Faqat clan rahbari qabul qila oladi.")
         return
-    cost = 5000 + clan_data["level"] * 3000
-    if clan_data["bank"] < cost:
-        await reply_text(update, f"Bank yetarli emas. Kerak: {cost:,}.")
-        return
-    clans = clans_with_defaults()
-    clan_data["bank"] -= cost
-    clan_data["level"] += 1
-    clan_data["xp"] = 0
+    target = str(context.args[0])
+    clans = clans_data()
+    clan_data["pending"] = [item for item in clan_data["pending"] if str(item.get("user")) != target]
+    if target not in clan_data["members"]:
+        clan_data["members"].append(target)
     write(CLANS_FILE, clans)
-    await reply_text(update, f"✅ Clan leveli {clan_data['level']} bo‘ldi.")
+    target_user = get_user(int(target))
+    target_user["clan"] = name
+    save_user(int(target), target_user)
+    await command_reply(update, f"✅ {target} qabul qilindi.")
+
+
+async def reject_clan(update, context):
+    if not context.args:
+        await command_reply(update, "Foydalanish: /rejectclan USER_ID")
+        return
+    name, clan_data = leader_clan(update.effective_user.id)
+    if not clan_data:
+        await command_reply(update, "Faqat clan rahbari rad qila oladi.")
+        return
+    clans = clans_data()
+    target = str(context.args[0])
+    clan_data["pending"] = [item for item in clan_data["pending"] if str(item.get("user")) != target]
+    write(CLANS_FILE, clans)
+    await command_reply(update, f"❌ {target} so‘rovi rad etildi.")
+
+
+async def assign_helper(update, context):
+    if not context.args:
+        await command_reply(update, "Foydalanish: /assignhelper USER_ID")
+        return
+    name, clan_data = leader_clan(update.effective_user.id)
+    if not clan_data:
+        await command_reply(update, "Faqat clan rahbari tayinlaydi.")
+        return
+    target = str(context.args[0])
+    if target not in clan_data["members"]:
+        await command_reply(update, "Bu foydalanuvchi clan a’zosi emas.")
+        return
+    clans = clans_data()
+    if target not in clan_data["helpers"]:
+        clan_data["helpers"].append(target)
+    write(CLANS_FILE, clans)
+    await command_reply(update, f"✅ {target} yordamchi bo‘ldi.")
+
+
+async def remove_helper(update, context):
+    if not context.args:
+        await command_reply(update, "Foydalanish: /removehelper USER_ID")
+        return
+    name, clan_data = leader_clan(update.effective_user.id)
+    if not clan_data:
+        await command_reply(update, "Faqat clan rahbari olib tashlaydi.")
+        return
+    clans = clans_data()
+    target = str(context.args[0])
+    clan_data["helpers"] = [member for member in clan_data["helpers"] if member != target]
+    write(CLANS_FILE, clans)
+    await command_reply(update, f"✅ {target} yordamchilikdan olindi.")
 
 
 async def callback(update, context):
@@ -419,13 +455,19 @@ def main():
     if not TOKEN:
         raise RuntimeError("BOT_TOKEN environment variable topilmadi")
     threading.Thread(target=run_web, daemon=True).start()
-    app = Application.builder().token(TOKEN).build()
-    commands = {"start": start, "profile": profile, "createclan": create_clan, "joinclan": join_clan, "leaveclan": leave_clan, "clans": clans_list, "clan": clan, "requestclan": request_clan, "acceptclan": accept_clan, "rejectclan": reject_clan, "assignhelper": assign_helper, "removehelper": remove_helper, "clanadmin": clan_admin, "donateclan": donate_clan, "clanupgrade": clan_upgrade}
+    application = Application.builder().token(TOKEN).build()
+    commands = {
+        "start": start, "profile": profile, "createclan": create_clan, "joinclan": join_clan,
+        "leaveclan": leave_clan, "clans": clans_list, "clan": clan, "requestclan": request_clan,
+        "acceptclan": accept_clan, "rejectclan": reject_clan, "assignhelper": assign_helper,
+        "removehelper": remove_helper, "clanadmin": clan_admin, "donateclan": clan_donate,
+        "clanupgrade": clan_upgrade, "clanwar": clan_war,
+    }
     for command, handler in commands.items():
-        app.add_handler(CommandHandler(command, handler))
-    app.add_handler(CallbackQueryHandler(callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-    app.run_polling(drop_pending_updates=True)
+        application.add_handler(CommandHandler(command, handler))
+    application.add_handler(CallbackQueryHandler(callback))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    application.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
