@@ -8,7 +8,7 @@ Render uchun tayyor Telegram bot.
 2. Ushbu repositoryni ulang.
 3. Environment Variable qo'shing:
 
-`BOT_TOKEN` = BotFather bergan token
+`BOT_TOKEN` = 8942775144:AAFsGOXxmLRPIf-FFfWewwTZ8lqfdT_XcKA
 
 4. Build command:
 
